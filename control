@@ -1,0 +1,9 @@
+﻿Package: com.huhansibuxin.autokiller
+Name: AutoKiller
+Version: 1.0
+Architecture: iphoneos-arm64
+Description: Kill Alipay 60s after entering background
+Maintainer: huhansibuxin
+Author: huhansibuxin
+Section: Tweaks
+Depends: mobilesubstrate
