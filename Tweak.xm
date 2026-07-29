@@ -41,11 +41,11 @@ static void scheduleKill(uint64_t delaySec) {
     // request background execution to keep GCD queues alive
     _bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"AutoKiller"
         expirationHandler:^{
-        _ak_log(@"bg task expired, killing");
-        _endBgTask();
+        [[UIApplication sharedApplication] endBackgroundTask:_bgTask];
+        _bgTask = UIBackgroundTaskInvalid;
         kill(getpid(), SIGKILL);
     }];
-    _ak_log([NSString stringWithFormat:@"bg task ID=%lu", (unsigned long)_bgTask]);
+    _ak_log([NSString stringWithFormat:@"bg task ID=%lu (will expire ~25s)", (unsigned long)_bgTask]);
 
     _killDeadline = dispatch_time(DISPATCH_TIME_NOW, delaySec * NSEC_PER_SEC);
     _killTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
@@ -102,8 +102,8 @@ static void cancelKill(void) {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
 
     if (state != UIApplicationStateActive) {
-        _ak_log(@"background launch, scheduling 30s kill");
-        scheduleKill(30);
+        _ak_log(@"background launch, scheduling 25s kill");
+        scheduleKill(25);
         [nc addObserverForName:UIApplicationWillEnterForegroundNotification
                         object:nil queue:nil usingBlock:^(NSNotification *note) {
             _ak_log(@"WillEnterForeground (bg launch path)");
@@ -116,7 +116,7 @@ static void cancelKill(void) {
     [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
                     object:nil queue:nil usingBlock:^(NSNotification *note) {
         _ak_log(@"DidEnterBackground");
-        scheduleKill(60);
+        scheduleKill(25);
     }];
     [nc addObserverForName:UIApplicationWillEnterForegroundNotification
                     object:nil queue:nil usingBlock:^(NSNotification *note) {
