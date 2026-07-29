@@ -19,16 +19,7 @@ static void _ak_log(NSString *msg) {
 }
 
 static dispatch_source_t _killTimer;
-static uint64_t _killDeadline;
-static UIBackgroundTaskIdentifier _bgTask = UIBackgroundTaskInvalid;
-
-static void _endBgTask(void) {
-    if (_bgTask != UIBackgroundTaskInvalid) {
-        [[UIApplication sharedApplication] endBackgroundTask:_bgTask];
-        _bgTask = UIBackgroundTaskInvalid;
-        _ak_log(@"ended bg task");
-    }
-}
+static uint64_t _killDeadline;  // nanoseconds from now
 
 static void scheduleKill(uint64_t delaySec) {
     if (_killTimer) {
@@ -38,26 +29,26 @@ static void scheduleKill(uint64_t delaySec) {
 
     _ak_log([NSString stringWithFormat:@"scheduleKill(%llu) called", delaySec]);
 
-    // request background execution to keep GCD queues alive
-    _bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"AutoKiller"
-        expirationHandler:^{
-        [[UIApplication sharedApplication] endBackgroundTask:_bgTask];
-        _bgTask = UIBackgroundTaskInvalid;
-        kill(getpid(), SIGKILL);
-    }];
-    _ak_log([NSString stringWithFormat:@"bg task ID=%lu (will expire ~25s)", (unsigned long)_bgTask]);
-
     _killDeadline = dispatch_time(DISPATCH_TIME_NOW, delaySec * NSEC_PER_SEC);
-    _killTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
 
-    dispatch_source_set_timer(_killTimer, _killDeadline,
-        DISPATCH_TIME_FOREVER, 0);
+    _killTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0));
+
+    // start after delaySec, then repeat every 1 second
+    // when app resumes from suspension, the next tick immediately checks deadline
+    dispatch_source_set_timer(_killTimer,
+        _killDeadline,
+        1 * NSEC_PER_SEC,
+        0);
 
     dispatch_source_set_event_handler(_killTimer, ^{
-        _ak_log(@"timer fired, killing");
-        _endBgTask();
-        kill(getpid(), SIGKILL);
+        uint64_t now = dispatch_time(DISPATCH_TIME_NOW, 0);
+        if (now >= _killDeadline) {
+            _ak_log([NSString stringWithFormat:@"deadline reached (+%llus), killing",
+                (now - _killDeadline) / NSEC_PER_SEC]);
+            kill(getpid(), SIGKILL);
+        }
+        // else: not yet, wait for next tick
     });
 
     dispatch_resume(_killTimer);
@@ -72,11 +63,10 @@ static void cancelKill(void) {
     }
 
     if (_killDeadline != 0 && dispatch_time(DISPATCH_TIME_NOW, 0) >= _killDeadline) {
-        _ak_log(@"deadline passed, killing");
-        _endBgTask();
+        uint64_t over = (dispatch_time(DISPATCH_TIME_NOW, 0) - _killDeadline) / NSEC_PER_SEC;
+        _ak_log([NSString stringWithFormat:@"deadline passed on return (+%llus), killing", over]);
         kill(getpid(), SIGKILL);
     }
-    _endBgTask();
     _killDeadline = 0;
 }
 
@@ -102,8 +92,8 @@ static void cancelKill(void) {
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
 
     if (state != UIApplicationStateActive) {
-        _ak_log(@"background launch, scheduling 25s kill");
-        scheduleKill(25);
+        _ak_log(@"background launch, scheduling 30s kill");
+        scheduleKill(30);
         [nc addObserverForName:UIApplicationWillEnterForegroundNotification
                         object:nil queue:nil usingBlock:^(NSNotification *note) {
             _ak_log(@"WillEnterForeground (bg launch path)");
@@ -116,7 +106,7 @@ static void cancelKill(void) {
     [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
                     object:nil queue:nil usingBlock:^(NSNotification *note) {
         _ak_log(@"DidEnterBackground");
-        scheduleKill(25);
+        scheduleKill(60);
     }];
     [nc addObserverForName:UIApplicationWillEnterForegroundNotification
                     object:nil queue:nil usingBlock:^(NSNotification *note) {
