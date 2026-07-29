@@ -1,5 +1,7 @@
 #import <UIKit/UIKit.h>
 #import <dispatch/dispatch.h>
+#import <signal.h>
+#import <unistd.h>
 
 static dispatch_source_t _killTimer;
 static uint64_t _killDeadline;
@@ -19,7 +21,7 @@ static void scheduleKill(void) {
 
     dispatch_source_set_event_handler(_killTimer, ^{
         NSLog(@"[AutoKiller] killing via exit(0)");
-        exit(0);
+        _exit(0);
     });
 
     dispatch_resume(_killTimer);
@@ -35,7 +37,7 @@ static void cancelKill(void) {
     // 后台队列被挂起时 handler 不会执行，回到前台这里补刀
     if (_killDeadline != 0 && dispatch_time(DISPATCH_TIME_NOW, 0) >= _killDeadline) {
         NSLog(@"[AutoKiller] deadline passed, killing now");
-        exit(0);
+        _exit(0);
     }
     _killDeadline = 0;
 }
@@ -62,7 +64,7 @@ static void cancelKill(void) {
             DISPATCH_TIME_FOREVER, 0);
         dispatch_source_set_event_handler(_killTimer, ^{
             NSLog(@"[AutoKiller] background launch, killing via exit(0)");
-            exit(0);
+            _exit(0);
         });
         dispatch_resume(_killTimer);
 
