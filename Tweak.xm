@@ -20,6 +20,15 @@ static void _ak_log(NSString *msg) {
 
 static dispatch_source_t _killTimer;
 static uint64_t _killDeadline;
+static UIBackgroundTaskIdentifier _bgTask = UIBackgroundTaskInvalid;
+
+static void _endBgTask(void) {
+    if (_bgTask != UIBackgroundTaskInvalid) {
+        [[UIApplication sharedApplication] endBackgroundTask:_bgTask];
+        _bgTask = UIBackgroundTaskInvalid;
+        _ak_log(@"ended bg task");
+    }
+}
 
 static void scheduleKill(uint64_t delaySec) {
     if (_killTimer) {
@@ -29,6 +38,15 @@ static void scheduleKill(uint64_t delaySec) {
 
     _ak_log([NSString stringWithFormat:@"scheduleKill(%llu) called", delaySec]);
 
+    // request background execution to keep GCD queues alive
+    _bgTask = [[UIApplication sharedApplication] beginBackgroundTaskWithName:@"AutoKiller"
+        expirationHandler:^{
+        _ak_log(@"bg task expired, killing");
+        _endBgTask();
+        kill(getpid(), SIGKILL);
+    }];
+    _ak_log([NSString stringWithFormat:@"bg task ID=%lu", (unsigned long)_bgTask]);
+
     _killDeadline = dispatch_time(DISPATCH_TIME_NOW, delaySec * NSEC_PER_SEC);
     _killTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
         dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
@@ -37,7 +55,8 @@ static void scheduleKill(uint64_t delaySec) {
         DISPATCH_TIME_FOREVER, 0);
 
     dispatch_source_set_event_handler(_killTimer, ^{
-        _ak_log(@"timer fired, calling kill(SIGKILL)");
+        _ak_log(@"timer fired, killing");
+        _endBgTask();
         kill(getpid(), SIGKILL);
     });
 
@@ -53,9 +72,11 @@ static void cancelKill(void) {
     }
 
     if (_killDeadline != 0 && dispatch_time(DISPATCH_TIME_NOW, 0) >= _killDeadline) {
-        _ak_log(@"deadline passed, calling kill(SIGKILL)");
+        _ak_log(@"deadline passed, killing");
+        _endBgTask();
         kill(getpid(), SIGKILL);
     }
+    _endBgTask();
     _killDeadline = 0;
 }
 
