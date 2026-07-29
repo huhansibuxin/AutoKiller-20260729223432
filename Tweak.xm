@@ -1,0 +1,76 @@
+#import <UIKit/UIKit.h>
+#import <dispatch/dispatch.h>
+
+static dispatch_source_t _killTimer;
+static volatile int _killScheduled;
+
+static void scheduleKill(void) {
+    if (_killTimer) {
+        dispatch_source_cancel(_killTimer);
+        _killTimer = nil;
+    }
+
+    _killScheduled = 1;
+    _killTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+        dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+
+    uint64_t delay = 60 * NSEC_PER_SEC;
+    dispatch_source_set_timer(_killTimer,
+        dispatch_time(DISPATCH_TIME_NOW, delay),
+        DISPATCH_TIME_FOREVER, 0);
+
+    dispatch_source_set_event_handler(_killTimer, ^{
+        NSLog(@"[AutoKiller] killing via exit(0)");
+        exit(0);
+    });
+
+    dispatch_resume(_killTimer);
+    NSLog(@"[AutoKiller] kill scheduled (60s)");
+}
+
+static void cancelKill(void) {
+    _killScheduled = 0;
+    if (_killTimer) {
+        dispatch_source_cancel(_killTimer);
+        _killTimer = nil;
+    }
+}
+
+%ctor {
+    __block UIApplicationState state;
+    if ([NSThread isMainThread]) {
+        state = [UIApplication sharedApplication].applicationState;
+    } else {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            state = [UIApplication sharedApplication].applicationState;
+        });
+    }
+
+    // 后台拉起：直接启动 60s 倒计时
+    if (state != UIApplicationStateActive) {
+        _killScheduled = 1;
+        _killTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+            dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0));
+
+        dispatch_source_set_timer(_killTimer,
+            dispatch_time(DISPATCH_TIME_NOW, 60 * NSEC_PER_SEC),
+            DISPATCH_TIME_FOREVER, 0);
+        dispatch_source_set_event_handler(_killTimer, ^{
+            NSLog(@"[AutoKiller] background launch, killing via exit(0)");
+            exit(0);
+        });
+        dispatch_resume(_killTimer);
+        return;
+    }
+
+    // 前台启动：注册切换通知
+    NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
+    [nc addObserverForName:UIApplicationDidEnterBackgroundNotification
+                    object:nil queue:nil usingBlock:^(NSNotification *note) {
+        scheduleKill();
+    }];
+    [nc addObserverForName:UIApplicationWillEnterForegroundNotification
+                    object:nil queue:nil usingBlock:^(NSNotification *note) {
+        cancelKill();
+    }];
+}
